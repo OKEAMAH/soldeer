@@ -1,30 +1,17 @@
-use std::io;
-use std::{
-    env,
-    fs::{
-        self,
-        create_dir_all,
-        remove_dir_all,
-        remove_file,
-    },
-    path::{
-        Path,
-        PathBuf,
-    },
-    process::Command,
-};
-
+use clap::Parser as _;
 use serial_test::serial;
 use soldeer::{
-    commands::{
-        Install,
-        Subcommands,
-    },
-    errors::SoldeerError,
-    DEPENDENCY_DIR,
-    LOCK_FILE,
+    commands::{Args, Install, Subcommands},
+    DEPENDENCY_DIR, LOCK_FILE,
 };
-use std::io::Write;
+use std::{
+    env,
+    fs::{self, create_dir_all, remove_dir_all, remove_file},
+    io,
+    io::Write,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 extern crate soldeer;
 
@@ -37,6 +24,8 @@ fn soldeer_install_valid_dependency() {
         dependency: Some("forge-std~1.8.2".to_string()),
         remote_url: None,
         rev: None,
+        regenerate_remappings: false,
+        recursive_deps: false,
     });
 
     match soldeer::run(command) {
@@ -102,21 +91,30 @@ contract TestSoldeer is Test {
     let _ = create_dir_all(test_project.join("dependencies").join("forge-std-1.8.2"));
 
     let _ = copy_dir_all(
-        env::current_dir()
-            .unwrap()
-            .join("dependencies")
-            .join("forge-std-1.8.2"),
+        env::current_dir().unwrap().join("dependencies").join("forge-std-1.8.2"),
         test_project.join("dependencies").join("forge-std-1.8.2"),
     );
+    let foundry_content = r#"
 
-    let _ = fs::copy(
-        env::current_dir().unwrap().join("foundry.toml"),
-        test_project.join("foundry.toml"),
-    );
+# Full reference https://github.com/foundry-rs/foundry/tree/master/crates/config
 
-    let _ = fs::copy(
-        env::current_dir().unwrap().join("remappings.txt"),
+[profile.default]
+script = "script"
+solc = "0.8.26"
+src = "src"
+test = "test"
+libs = ["dependencies"]
+
+[dependencies]
+forge-std = "1.8.2"
+
+"#;
+
+    let _ = fs::write(test_project.join("foundry.toml"), foundry_content);
+
+    let _ = fs::write(
         test_project.join("remappings.txt"),
+        "@forge-std-1.8.2=dependencies/forge-std-1.8.2",
     );
 
     let output = Command::new("forge")
@@ -128,10 +126,7 @@ contract TestSoldeer is Test {
 
     let passed = String::from_utf8(output.stdout).unwrap().contains("[PASS]");
     if !passed {
-        println!(
-            "This will fail with: {:?}",
-            String::from_utf8(output.stderr).unwrap()
-        );
+        eprintln!("This failed with: {:?}", String::from_utf8(output.stderr).unwrap());
     }
     assert!(passed);
     clean_test_env(&test_project);
@@ -140,25 +135,7 @@ contract TestSoldeer is Test {
 #[test]
 #[serial]
 fn soldeer_install_invalid_dependency() {
-    let command = Subcommands::Install(Install {
-        dependency: Some("forge-std".to_string()),
-        remote_url: None,
-        rev: None,
-    });
-
-    match soldeer::run(command) {
-        Ok(_) => {
-            assert_eq!("Invalid State", "")
-        }
-        Err(err) => {
-            assert_eq!(
-                err,
-                SoldeerError{
-                   message: "Dependency forge-std does not specify a version.\nThe format should be [DEPENDENCY]~[VERSION]".to_string()
-                }
-            );
-        }
-    }
+    assert!(Args::try_parse_from(["soldeer", "install", "forge-std"]).is_err());
 
     let path_dependency = DEPENDENCY_DIR.join("forge-std");
     let path_zip = DEPENDENCY_DIR.join("forge-std.zip");
